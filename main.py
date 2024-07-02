@@ -26,12 +26,17 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--save",action='store_true',help="save detection results to txt")
 parser.add_argument("--opt",default='adam',type=str,help="optimizer")
+parser.add_argument("--model",default='small',type=str,help="optimizer")
+parser.add_argument("--dataset",default='cifar',type=str,help="dataset")
 parser.add_argument("--prefix",default='robust_model',type=str,help="optimizer")
 parser.add_argument("--method",default='madry',type=str,help="optimizer")
 parser.add_argument("--lr",default=1e-4,type=float,help="learning rate")
 parser.add_argument("--epsilon",default=2/255,type=float,help="")
 parser.add_argument("--alpha",default=0.95,type=float,help="")
 parser.add_argument("--interpol",default=10,type=int,help="")
+
+parser.add_argument("--madry_eps",default=2/255,type=float,help="")
+parser.add_argument("--madry_steps",default=20,type=float,help="")
 
 parser.add_argument("--epochs",default=40,type=int,help="")
 parser.add_argument("--seed",default=1234,type=int,help="")
@@ -40,9 +45,24 @@ parser.add_argument("--test_batch_size",default=32,type=int,help="test batch siz
 args = parser.parse_args()
 
 
-
-train_loader, _ = cifar_loaders(args.batch_size)
-_, test_loader = cifar_loaders(args.test_batch_size)
+if args.dataset=='cifar':
+    train_loader, _ = cifar_loaders(args.batch_size)
+    _, test_loader = cifar_loaders(args.test_batch_size)
+    if args.model=='small':
+        model = cifar_model().cuda()
+    elif args.model == 'large':
+        model = cifar_model_large().cuda()
+    elif args.model == 'resnet':
+        model = model_resnet(cifar=True)
+elif args.dataset=='mnist':
+    train_loader, _ = mnist_loaders(args.batch_size)
+    _, test_loader = mnist_loaders(args.test_batch_size)
+    if args.model=='small':
+        model = mnist_model().cuda()
+    elif args.model == 'large':
+        model = mnist_model_large().cuda()
+    elif args.model == 'resnet':
+        model = model_resnet(cifar=False)
 
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
@@ -52,7 +72,10 @@ np.random.seed(0)
 sampler_indices = []
 
 #model = [select_model(args.model)]
-model = cifar_model_large().cuda()
+
+
+
+
 
 if args.opt == 'adam':
     opt = optim.Adam(model.parameters(), lr=args.lr)
@@ -61,6 +84,7 @@ else:
 
 best_err=1
 best_perr, best_loss=None, None
+patience=0
 for t in range(args.epochs):
     # standard training
     if args.method == 'em':
@@ -68,9 +92,13 @@ for t in range(args.epochs):
         #vloss, verr, vploss, vperr = evaluate_baseline(test_loader, model[0], t)
     # madry training
     elif args.method=='madry':
-        loss, err, ploss, perr = train_madry(train_loader, model, args.epsilon, opt, t, steps=20, stepsize=2/255)
+        loss, err, ploss, perr = train_madry(train_loader, model, args.epsilon, opt, t, steps=args.madry_eps, stepsize=args.madry_steps)
         #vloss, verr, vperr = evaluate_madry(test_loader, model, args.epsilon, t, steps=20, stepsize=2/255)
     # robust training
+    elif args.method == 'pwl':
+        loss, err, ploss, perr = train_pwl(train_loader, model, args.epsilon, opt, t, alpha=args.alpha, interpol=args.interpol)
+        #vloss, verr, vploss, vperr = evaluate_baseline(test_loader, model[0], t)
+    # madry training
     else:
         pass
         """
@@ -85,10 +113,11 @@ for t in range(args.epochs):
         """
     print('Epoch: {}'
           'Loss {} ({})\t'
-          'PGD Error {} ({})\t'
+          'Adv. Error {} ({})\t'
           'Error {} ({})'.format(
               t, loss, best_loss, perr, best_perr, err, best_err))
     if err < best_err:
+        patience=0
         print("SAVE")
         best_err = err
         best_loss = loss
@@ -97,7 +126,12 @@ for t in range(args.epochs):
             'state_dict' : [m.state_dict() for m in model],
             'err' : best_err,
             'epoch' : t},
-            args.prefix + "_" + args.method + "_best.pth")
+            args.prefix + "_" + args.method + "_" + args.dataset + "_" + args.model + "_eps_" + str(args.epsilon) + "_best.pth")
+    else:
+        patience=patience+1
+    if patience > 10:
+        print("ENOUGH!")
+        break
 
     #torch.save({
     #    'state_dict': [m.state_dict() for m in model],
