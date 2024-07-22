@@ -98,8 +98,9 @@ def evaluate_madry(loader, model, epsilon, epoch, steps=40, stepsize=0.01):
 
         # measure accuracy and record loss
         epoch_loss=epoch_loss+ce.item()
-        epoch_err = epoch_err+err
-        epoch_perr = epoch_perr+perr
+        #epoch_err = epoch_err+err
+        #epoch_perr = epoch_perr+perr
+        epoch_err, epoch_perr = epoch_err+err*X.size(0), epoch_perr+perr*X.size(0)
         nsamp=nsamp+X.size(0)
     return epoch_loss/nsamp, epoch_err/nsamp, epoch_perr/nsamp
 
@@ -141,6 +142,7 @@ def train_em(loader, model, epsilon, opt, epoch, alpha=0.95, interpol=10):
                 labind=labind+1
             """
             #one constraint for any label!=gt
+            #"""
             A_ub=-np.ones((1, np.prod(X_em[0].shape) + 1))
             #z=timer()
             idx=[i for i in range(len(outs[0]))]
@@ -150,12 +152,16 @@ def train_em(loader, model, epsilon, opt, epoch, alpha=0.95, interpol=10):
             #a=timer()
             outz=torch.sum(outs[:,idx], dim=1)
             outz=outz-outs[:,y[ii]]
+            #input(outz.shape)
 
 
             coefs=np.linalg.lstsq(torch.cat([X_em_top[ii,:,:,:,:].view(2*interpol+1,-1), torch.ones((2*interpol+1,1)).cuda()],dim=1).cpu().detach().numpy(), outz.cpu().detach().numpy())[0]#constraints
+            #input(coefs.shape)
 
             b_ub=-coefs[-1]
             A_ub[0,1:]=coefs[:-1]
+            #input(A_ub)
+            #"""
 
             tbounds=[(None,None)]
             xbounds=[(lb,ub) for lb,ub in zip(X_em_top[ii,0,:,:,:].flatten().cpu().detach().numpy(), X_em_top[ii,-1,:,:,:].flatten().cpu().detach().numpy())]
@@ -171,8 +177,8 @@ def train_em(loader, model, epsilon, opt, epoch, alpha=0.95, interpol=10):
             X_em[ii,:,:,:]=torch.from_numpy(Xemj).cuda().view(X_em[ii,:,:,:].shape)
 
         # adjust to be within [-epsilon, epsilon]
-        eta = torch.clamp(X_em - X, -epsilon, epsilon)
-        X_em = X + eta
+        #eta = torch.clamp(X_em - X, -epsilon, epsilon)
+        #X_em = X + eta
         X_em = torch.clamp(X_em, 0, 1)
 
         out = model(X)
@@ -300,6 +306,29 @@ def train_pwl(loader, model, epsilon, opt, epoch, alpha=0.95, interpol=10):
         nsamp=nsamp+X.size(0)
 
     return epoch_loss/nsamp, epoch_err/nsamp, epoch_ploss/nsamp, epoch_perr/nsamp
+
+def train_clean(loader, model, opt, epoch):#for CIFAR, default is steps=7, stepsize=2
+    model.train()
+    epoch_loss, epoch_err = 0,0
+    nsamp=0
+    for i, (X,y) in tqdm(enumerate(loader)):
+        X,y = X.cuda(), y.cuda()
+        # # perturb
+
+        out = model(Variable(X))
+        ce = nn.CrossEntropyLoss()(out, Variable(y))
+        err = (out.data.max(1)[1] != y).float().sum()  / X.size(0)
+
+        opt.zero_grad()
+        ce.backward()
+        opt.step()
+
+        epoch_loss=epoch_loss+ce.item()
+        epoch_err = epoch_err+err*X.size(0)
+        nsamp=nsamp+X.size(0)
+        #input([epoch_loss/nsamp, epoch_err/nsamp, epoch_ploss/nsamp, epoch_perr/nsamp])
+
+    return epoch_loss/nsamp, epoch_err/nsamp
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""

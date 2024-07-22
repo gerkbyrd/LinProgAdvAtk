@@ -27,6 +27,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--save",action='store_true',help="save detection results to txt")
 parser.add_argument("--opt",default='adam',type=str,help="optimizer")
 parser.add_argument("--model",default='small',type=str,help="optimizer")
+parser.add_argument("--model_path",default='./whatever.pth',type=str,help="optimizer")
 parser.add_argument("--dataset",default='cifar',type=str,help="dataset")
 parser.add_argument("--prefix",default='robust_model',type=str,help="optimizer")
 parser.add_argument("--method",default='madry',type=str,help="optimizer")
@@ -34,9 +35,11 @@ parser.add_argument("--lr",default=1e-4,type=float,help="learning rate")
 parser.add_argument("--epsilon",default=2/255,type=float,help="")
 parser.add_argument("--alpha",default=0.95,type=float,help="")
 parser.add_argument("--interpol",default=10,type=int,help="")
+parser.add_argument("--eval",action='store_true',help="evaluate adversarially trained model")
+
 
 parser.add_argument("--madry_eps",default=2/255,type=float,help="")
-parser.add_argument("--madry_steps",default=20,type=float,help="")
+parser.add_argument("--madry_steps",default=20,type=int,help="")
 
 parser.add_argument("--epochs",default=40,type=int,help="")
 parser.add_argument("--seed",default=1234,type=int,help="")
@@ -64,18 +67,13 @@ elif args.dataset=='mnist':
     elif args.model == 'resnet':
         model = model_resnet(cifar=False)
 
+
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
 random.seed(0)
 np.random.seed(0)
 
 sampler_indices = []
-
-#model = [select_model(args.model)]
-
-
-
-
 
 if args.opt == 'adam':
     opt = optim.Adam(model.parameters(), lr=args.lr)
@@ -85,56 +83,64 @@ else:
 best_err=1
 best_perr, best_loss=None, None
 patience=0
-for t in range(args.epochs):
-    # standard training
-    if args.method == 'em':
-        loss, err, ploss, perr = train_em(train_loader, model, args.epsilon, opt, t, alpha=args.alpha, interpol=args.interpol)
-        #vloss, verr, vploss, vperr = evaluate_baseline(test_loader, model[0], t)
-    # madry training
-    elif args.method=='madry':
-        loss, err, ploss, perr = train_madry(train_loader, model, args.epsilon, opt, t, steps=args.madry_eps, stepsize=args.madry_steps)
-        #vloss, verr, vperr = evaluate_madry(test_loader, model, args.epsilon, t, steps=20, stepsize=2/255)
-    # robust training
-    elif args.method == 'pwl':
-        loss, err, ploss, perr = train_pwl(train_loader, model, args.epsilon, opt, t, alpha=args.alpha, interpol=args.interpol)
-        #vloss, verr, vploss, vperr = evaluate_baseline(test_loader, model[0], t)
-    # madry training
-    else:
-        pass
-        """
-        train_robust(train_loader, model[0], opt, epsilon, t,
-           train_log, args.verbose, args.real_time,
-           norm_type=args.norm_train, bounded_input=False, clip_grad=1,
-           **kwargs)
-        err = evaluate_robust(test_loader, model[0], args.epsilon, t,
-           test_log, args.verbose, args.real_time,
-           norm_type=args.norm_test, bounded_input=False,
-           **kwargs)
-        """
-    print('Epoch: {}'
-          'Loss {} ({})\t'
-          'Adv. Error {} ({})\t'
-          'Error {} ({})'.format(
-              t, loss, best_loss, perr, best_perr, err, best_err))
-    if err < best_err:
-        patience=0
-        print("SAVE")
-        best_err = err
-        best_loss = loss
-        best_perr = perr
-        torch.save({
-            'state_dict' : [m.state_dict() for m in model],
-            'err' : best_err,
-            'epoch' : t},
-            args.prefix + "_" + args.method + "_" + args.dataset + "_" + args.model + "_eps_" + str(args.epsilon) + "_best.pth")
-    else:
-        patience=patience+1
-    if patience > 10:
-        print("ENOUGH!")
-        break
+if not args.eval:
+    for t in range(args.epochs):
+        # standard training
+        if args.method == 'em':
+            loss, err, ploss, perr = train_em(train_loader, model, args.epsilon, opt, t, alpha=args.alpha, interpol=args.interpol)
+            #vloss, verr, vploss, vperr = evaluate_baseline(test_loader, model[0], t)
+        # madry training
+        elif args.method=='madry':
+            loss, err, ploss, perr = train_madry(train_loader, model, args.epsilon, opt, t, steps=args.madry_steps, stepsize=args.madry_eps)
+            #vloss, verr, vperr = evaluate_madry(test_loader, model, args.epsilon, t, steps=20, stepsize=2/255)
+        # robust training
+        elif args.method == 'pwl':
+            loss, err, ploss, perr = train_pwl(train_loader, model, args.epsilon, opt, t, alpha=args.alpha, interpol=args.interpol)
+            #vloss, verr, vploss, vperr = evaluate_baseline(test_loader, model[0], t)
+        # madry training
+        else:
+            loss, err= train_clean(train_loader, model, opt, t)
+            ploss, perr =0,0
+            """
+            train_robust(train_loader, model[0], opt, epsilon, t,
+               train_log, args.verbose, args.real_time,
+               norm_type=args.norm_train, bounded_input=False, clip_grad=1,
+               **kwargs)
+            err = evaluate_robust(test_loader, model[0], args.epsilon, t,
+               test_log, args.verbose, args.real_time,
+               norm_type=args.norm_test, bounded_input=False,
+               **kwargs)
+            """
+        print('Epoch: {}'
+              'Loss {} ({})\t'
+              'Adv. Error {} ({})\t'
+              'Error {} ({})'.format(
+                  t, loss, best_loss, perr, best_perr, err, best_err))
+        if err < best_err:
+            patience=0
+            print("SAVE")
+            best_err = err
+            best_loss = loss
+            best_perr = perr
+            torch.save({
+                'state_dict' : [m.state_dict() for m in model],
+                'err' : best_err,
+                'epoch' : t},
+                args.prefix + "_" + args.method + "_" + args.dataset + "_" + args.model + "_eps_" + str(args.epsilon) + "_best.pth")
+        else:
+            patience=patience+1
+        if patience > 10:
+            print("ENOUGH!")
+            break
 
-    #torch.save({
-    #    'state_dict': [m.state_dict() for m in model],
-    #    'err' : err,
-    #    'epoch' : t},
-    #    args.prefix + "_checkpoint.pth")
+else:
+    checkpoint = torch.load(args.model_path)
+    for sd,m in zip(checkpoint['state_dict'], model):
+        m.load_state_dict(sd)
+    #model.load_state_dict(checkpoint['state_dict'])
+    model=model.eval()
+    vloss, verr, vperr = evaluate_madry(test_loader, model, args.epsilon, 0, steps=args.madry_steps, stepsize=args.madry_eps)
+    print('Loss {}\t'
+          'Adv. Error {}\t'
+          'Error {}'.format(
+              vloss, vperr, verr))
