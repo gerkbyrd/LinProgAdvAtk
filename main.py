@@ -34,14 +34,18 @@ parser.add_argument("--method",default='madry',type=str,help="optimizer")
 parser.add_argument("--lr",default=1e-4,type=float,help="learning rate")
 parser.add_argument("--epsilon",default=2/255,type=float,help="")
 parser.add_argument("--alpha",default=0.95,type=float,help="")
-parser.add_argument("--interpol",default=10,type=int,help="")
+parser.add_argument("--interpol",default=3,type=int,help="half the # of discrete points for the mesh around an image")
+parser.add_argument("--row",default=500,type=int,help="random samples taken from the mesh")
+parser.add_argument("--segs",default=1,type=int,help="segments for pwl (use 1 for EMRob)")
+
 parser.add_argument("--eval",action='store_true',help="evaluate adversarially trained model")
+parser.add_argument("--eval_method",default='madry',type=str,help="adversarial attack for eval")
 
 
 parser.add_argument("--madry_eps",default=2/255,type=float,help="")
 parser.add_argument("--madry_steps",default=20,type=int,help="")
 
-parser.add_argument("--epochs",default=40,type=int,help="")
+parser.add_argument("--epochs",default=1000,type=int,help="")
 parser.add_argument("--seed",default=1234,type=int,help="")
 parser.add_argument("--batch_size",default=32,type=int,help="training batch size")
 parser.add_argument("--test_batch_size",default=32,type=int,help="test batch size")
@@ -49,6 +53,7 @@ args = parser.parse_args()
 
 
 if args.dataset=='cifar':
+    inbounds=[-2.1555557,2.64]
     train_loader, _ = cifar_loaders(args.batch_size)
     _, test_loader = cifar_loaders(args.test_batch_size)
     if args.model=='small':
@@ -58,6 +63,7 @@ if args.dataset=='cifar':
     elif args.model == 'resnet':
         model = model_resnet(cifar=True)
 elif args.dataset=='mnist':
+    inbounds=[0.0,1.0]
     train_loader, _ = mnist_loaders(args.batch_size)
     _, test_loader = mnist_loaders(args.test_batch_size)
     if args.model=='small':
@@ -87,15 +93,15 @@ if not args.eval:
     for t in range(args.epochs):
         # standard training
         if args.method == 'em':
-            loss, err, ploss, perr = train_em(train_loader, model, args.epsilon, opt, t, alpha=args.alpha, interpol=args.interpol)
+            loss, err, ploss, perr = train_em(train_loader, model, args.epsilon, opt, t, alpha=args.alpha, interpol=args.interpol, inbounds=inbounds)
             #vloss, verr, vploss, vperr = evaluate_baseline(test_loader, model[0], t)
         # madry training
         elif args.method=='madry':
-            loss, err, ploss, perr = train_madry(train_loader, model, args.epsilon, opt, t, steps=args.madry_steps, stepsize=args.madry_eps)
+            loss, err, ploss, perr = train_madry(train_loader, model, args.epsilon, opt, t, steps=args.madry_steps, stepsize=args.madry_eps, inbounds=inbounds)
             #vloss, verr, vperr = evaluate_madry(test_loader, model, args.epsilon, t, steps=20, stepsize=2/255)
         # robust training
         elif args.method == 'pwl':
-            loss, err, ploss, perr = train_pwl(train_loader, model, args.epsilon, opt, t, alpha=args.alpha, interpol=args.interpol)
+            loss, err, ploss, perr = train_pwl(train_loader, model, args.epsilon, opt, t, alpha=args.alpha, interpol=args.interpol, inbounds=inbounds)
             #vloss, verr, vploss, vperr = evaluate_baseline(test_loader, model[0], t)
         # madry training
         else:
@@ -126,10 +132,10 @@ if not args.eval:
                 'state_dict' : [m.state_dict() for m in model],
                 'err' : best_err,
                 'epoch' : t},
-                args.prefix + "_" + args.method + "_" + args.dataset + "_" + args.model + "_eps_" + str(args.epsilon) + "_best.pth")
+                args.prefix + "_" + args.method + "_" + args.dataset + "_" + args.model + "_eps_" + str(args.epsilon) + "_alpha_"+str(args.alpha)+"_best.pth")
         else:
             patience=patience+1
-        if patience > 10:
+        if patience > 50:
             print("ENOUGH!")
             break
 
@@ -139,7 +145,13 @@ else:
         m.load_state_dict(sd)
     #model.load_state_dict(checkpoint['state_dict'])
     model=model.eval()
-    vloss, verr, vperr = evaluate_madry(test_loader, model, args.epsilon, 0, steps=args.madry_steps, stepsize=args.madry_eps)
+    if args.eval_method=='em':
+        vloss, verr, vperr = evaluate_em(test_loader, model, args.epsilon, 0, interpol=args.interpol, inbounds=inbounds, rowling=args.row)
+    elif args.eval_method=='pwl':
+        vloss, verr, vperr = evaluate_pwl(test_loader, model, args.epsilon, 0, interpol=args.interpol, inbounds=inbounds, rowling=args.row, segs=args.segs)
+    else:
+        #input(args.madry_eps)
+        vloss, verr, vperr = evaluate_madry(test_loader, model, args.epsilon, 0, steps=args.madry_steps, stepsize=args.madry_eps, inbounds=inbounds)
     print('Loss {}\t'
           'Adv. Error {}\t'
           'Error {}'.format(
